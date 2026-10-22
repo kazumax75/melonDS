@@ -4,6 +4,7 @@
 
 #include <stddef.h>
 #include <sys/types.h>
+#include <array>
 #include <map>
 #include <vector>
 
@@ -93,7 +94,8 @@ enum class ExecResult
 	Continue
 };
 
-constexpr int GDBPROTO_BUFFER_CAPACITY = 1024+128;
+// 16 KiB payload per packet (gdb reads ~8 KiB of memory per 'm' packet).
+constexpr int GDBPROTO_BUFFER_CAPACITY = 16*1024+128;
 
 class GdbStub;
 
@@ -142,7 +144,8 @@ public:
 	void DelAllBpWp();
 
 	StubState CheckBkpt(u32 addr, bool enter, bool stay);
-	StubState CheckWatchpt(u32 addr, int kind, bool enter, bool stay);
+	// size: width of the access in bytes (1, 2 or 4)
+	StubState CheckWatchpt(u32 addr, u32 size, int kind, bool enter, bool stay);
 
 #include "GdbCmds.h"
 

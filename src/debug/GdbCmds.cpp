@@ -131,7 +131,7 @@ static int DoQResponse(GdbStub* stub, const u8* query, const char* data, const s
 }
 
 __attribute__((__aligned__(4)))
-static u8 tempdatabuf[1024];
+static u8 tempdatabuf[GDBPROTO_BUFFER_CAPACITY];
 
 ExecResult GdbStub::Handle_g(GdbStub* stub, const u8* cmd, ssize_t len)
 {
@@ -585,12 +585,10 @@ ExecResult GdbStub::Handle_Question(GdbStub* stub, const u8* cmd, ssize_t len)
 			switch (typ)
 			{
 			case 1:
-				stub->RespFmt("S%02X", GdbSignal::TRAP);
-				//stub->RespFmt("T%02Xhwbreak:"/*"%08X"*/";", GdbSignal::TRAP/*, arg*/);
+				stub->RespFmt("T%02Xhwbreak:;", GdbSignal::TRAP);
 				break;
 			case 2:
-				stub->RespFmt("S%02X", GdbSignal::TRAP);
-				//stub->RespFmt("T%02Xwatch:"/*"%08X"*/";", GdbSignal::TRAP/*, arg*/);
+				stub->RespFmt("T%02Xwatch:%08X;", GdbSignal::TRAP, arg);
 				break;
 			default:
 				stub->RespFmt("S%02X", GdbSignal::TRAP);
@@ -651,7 +649,7 @@ ExecResult GdbStub::Handle_z(GdbStub* stub, const u8* cmd, ssize_t len)
 	int typ;
 	u32 addr, kind;
 
-	if (sscanf((const char*)cmd, "%d,%x,%u", &typ, &addr, &kind) != 3)
+	if (sscanf((const char*)cmd, "%d,%x,%x", &typ, &addr, &kind) != 3)
 	{
 		stub->RespStr("E01");
 		return ExecResult::Ok;
@@ -679,7 +677,7 @@ ExecResult GdbStub::Handle_Z(GdbStub* stub, const u8* cmd, ssize_t len)
 	int typ;
 	u32 addr, kind;
 
-	if (sscanf((const char*)cmd, "%d,%x,%u", &typ, &addr, &kind) != 3)
+	if (sscanf((const char*)cmd, "%d,%x,%x", &typ, &addr, &kind) != 3)
 	{
 		stub->RespStr("E01");
 		return ExecResult::Ok;

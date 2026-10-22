@@ -120,13 +120,13 @@ bool GdbStub::Init(int port)
 #endif
 
 	server->sin_family = AF_INET;
-	server->sin_addr.s_addr = htonl(INADDR_ANY);
+	server->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 	server->sin_port = htons(Port);
 
 	r = bind(SockFd, (const sockaddr*)server, sizeof(*server));
 	if (r < 0)
 	{
-		Log(LogLevel::Error, "[GDB] err: can't bind to address <any> and port %d\n", Port);
+		Log(LogLevel::Error, "[GDB] err: can't bind to address 127.0.0.1 and port %d\n", Port);
 		goto err;
 	}
 
@@ -160,6 +160,8 @@ void GdbStub::Disconnect()
 {
 	if (ConnFd > 0) closesocket(ConnFd);
 	ConnFd = 0;
+	NoAck = false;
+	RecvBufferFilled = 0;
 }
 
 GdbStub::~GdbStub()
@@ -262,11 +264,11 @@ StubState GdbStub::HandlePacket()
 	{
 		Stat = TgtStatus::BreakReq;
 		return StubState::Attach;
-	/*}
+	}
 	else if (r == ExecResult::Detached)
 	{
 		Stat = TgtStatus::None;
-		return StubState::Disconnect;*/
+		return StubState::Disconnect;
 	}
 	else if (r == ExecResult::Continue)
 	{
@@ -327,6 +329,14 @@ StubState GdbStub::Poll(bool wait)
 			Log(LogLevel::Error, "[GDB] inital handshake: unexpected character '%c'!\n", a);
 		}
 		SendAck();
+
+		// fresh connection: forget everything the previous client left behind
+		NoAck = false;
+		RecvBufferFilled = 0;
+		Cmdlen = 0;
+		CurBkpt = 0;
+		CurWatchpt = 0;
+		DelAllBpWp();
 
 		Stat = TgtStatus::Running; // on connected
 		StatFlag = false;
@@ -403,8 +413,7 @@ StubState GdbStub::Poll(bool wait)
 	case_gdbp_eof:
 	case ReadResult::Eof:
 		Log(LogLevel::Info, "[GDB] EOF!\n");
-		closesocket(ConnFd);
-		ConnFd = 0;
+		Disconnect();
 		return StubState::Disconnect;
 	case ReadResult::CksumErr:
 		Log(LogLevel::Info, "[GDB] checksum err!\n");
@@ -524,7 +533,9 @@ StubState GdbStub::Enter(bool stay, TgtStatus stat, u32 arg, bool wait_for_conn)
 			break;
 		case StubState::Disconnect:
 			Log(LogLevel::Info, "[GDB] disconnect\n");
+			Disconnect();
 			SignalStatus(TgtStatus::None, ~(u32)0);
+			StatFlag = false;
 			do_next = false;
 			break;
 		default: break;
@@ -635,22 +646,36 @@ StubState GdbStub::CheckBkpt(u32 addr, bool enter, bool stay)
 		return StubState::None;
 	}
 }
-StubState GdbStub::CheckWatchpt(u32 addr, int kind, bool enter, bool stay)
+StubState GdbStub::CheckWatchpt(u32 addr, u32 size, int kind, bool enter, bool stay)
 {
+	if (WpList.empty()) return StubState::CheckNoHit;
+	if (size == 0) size = 1;
+
+	// WpList is sorted by addr. An access [addr, addr+size) hits a watchpoint
+	// [wp.addr, wp.addr+wp.len) if the two ranges overlap, so a narrow watch
+	// is also caught by a wider access starting below it (e.g. a 32-bit store
+	// or a memcpy).
 	for (auto search = WpList.begin(); search != WpList.end(); ++search)
 	{
-		if (search->addr > addr) break;
+		if (search->addr >= addr + size) break;
 
-		if (addr >= search->addr && addr < search->addr + search->len && (search->kind == (int)WatchptKind::Access || search->kind == kind))
+		bool overlap = (addr < search->addr + search->len) && (addr + size > search->addr);
+		bool kindOk = (search->kind == (int)WatchptKind::Access)
+			|| (search->kind == kind)
+			|| (kind == (int)WatchptKind::Access);
+		if (overlap && kindOk)
 		{
+			// report an address that lies inside the watchpoint range, so gdb
+			// can attribute the stop to that watchpoint
+			u32 hit = (addr > search->addr) ? addr : search->addr;
 			if (enter)
 			{
-				StubState r = Enter(stay, TgtStatus::Watchpt, addr);
+				StubState r = Enter(stay, TgtStatus::Watchpt, hit);
 				return r;
 			}
 			else
 			{
-				SignalStatus(TgtStatus::Watchpt, addr);
+				SignalStatus(TgtStatus::Watchpt, hit);
 				return StubState::None;
 			}
 		}
